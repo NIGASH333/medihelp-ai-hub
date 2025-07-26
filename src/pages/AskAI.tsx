@@ -9,10 +9,13 @@ import { useToast } from "@/hooks/use-toast";
 const AskAI = () => {
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [showAnswer, setShowAnswer] = useState(false);
   const { toast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     if (!question.trim()) {
       toast({
         title: "Question Required",
@@ -22,17 +25,39 @@ const AskAI = () => {
       return;
     }
 
-    setIsLoading(true);
-    
-    // Simulate API call - This is where the chatbot API integration will go
-    setTimeout(() => {
-      setIsLoading(false);
-      toast({
-        title: "Question Received!",
-        description: "Our AI is processing your question. The chatbot integration will be available soon.",
+        setIsLoading(true);
+    setShowAnswer(true);
+    setAnswer("");
+
+    try {
+      // Call your FastAPI endpoint
+      const response = await fetch("http://127.0.0.1:8000/query", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ question }),
       });
-      setQuestion("");
-    }, 2000);
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch answer");
+      }
+
+      const data = await response.json();
+
+      // Set the answer in the state
+      setAnswer(data.answer || "No answer found");
+      setQuestion(""); // clear input
+    } catch (error) {
+      setAnswer("Sorry, something went wrong. Please try again.");
+      toast({
+        title: "Error",
+        description: "Something went wrong. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const exampleQuestions = [
@@ -138,6 +163,32 @@ const AskAI = () => {
             </form>
           </CardContent>
         </Card>
+
+        {/* Answer Display Box */}
+        {showAnswer && (
+          <Card className="mb-8 shadow-medical">
+            <CardHeader>
+              <CardTitle className="flex items-center space-x-2">
+                <Brain className="h-6 w-6 text-primary" />
+                <span>AI Response</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <div className="flex items-center space-x-3 p-4">
+                  <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-muted-foreground">Thinking...</span>
+                </div>
+              ) : (
+                <div className="prose prose-sm max-w-none">
+                  <p className="text-foreground leading-relaxed whitespace-pre-wrap">
+                    {answer}
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Chatbot Integration Notice */}
         <Card className="mb-8 bg-secondary/50">
