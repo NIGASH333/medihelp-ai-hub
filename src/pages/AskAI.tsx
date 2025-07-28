@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Brain, Send, AlertTriangle, Shield, Clock, MessageSquare } from "lucide-react";
+import { Brain, Send, AlertTriangle, Shield, Clock, MessageSquare, Mic, Volume2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 const AskAI = () => {
@@ -11,7 +11,179 @@ const AskAI = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [answer, setAnswer] = useState("");
   const [showAnswer, setShowAnswer] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [wasVoiceInput, setWasVoiceInput] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isInCall, setIsInCall] = useState(false); // New: call mode state
   const { toast } = useToast();
+
+  // ElevenLabs API Configuration
+  const ELEVENLABS_API_KEY = "YOUR_ELEVENLABS_API_KEY"; // Replace with your actual API key
+  const VOICE_ID = "YOUR_VOICE_ID"; // Replace with your trained voice ID
+
+  // Web Speech API for speech-to-text with auto-submit
+  const handleVoiceInput = () => {
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      toast({
+        title: "Speech Recognition Not Supported",
+        description: "Your browser does not support the Web Speech API.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!isInCall) {
+      // Start call mode
+      setIsInCall(true);
+      setShowAnswer(false);
+      setAnswer("");
+      setAudioUrl(null);
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false; // Stop after one utterance
+    recognition.onstart = () => setListening(true);
+    recognition.onerror = (event: any) => {
+      setListening(false);
+      toast({
+        title: "Speech Recognition Error",
+        description: event.error || "Could not recognize speech.",
+        variant: "destructive",
+      });
+    };
+    recognition.onend = () => {
+      setListening(false);
+      // Auto-restart listening in call mode
+      if (isInCall && !isLoading) {
+        setTimeout(() => {
+          if (isInCall) {
+            handleVoiceInput();
+          }
+        }, 1000);
+      }
+    };
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setQuestion(transcript);
+      setWasVoiceInput(true);
+      setListening(false);
+      
+      // Auto-submit the question
+      if (transcript.trim()) {
+        handleSubmitAutomatically(transcript);
+      }
+    };
+    recognition.start();
+  };
+
+  // Auto-submit function for call mode
+  const handleSubmitAutomatically = async (questionText: string) => {
+    if (!questionText.trim()) return;
+
+    setIsLoading(true);
+    setShowAnswer(true);
+    setAnswer("");
+
+    try {
+      // Call your FastAPI endpoint
+      const response = await fetch("http://127.0.0.1:8000/query", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ question: questionText }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch answer");
+      }
+
+      const data = await response.json();
+      setAnswer(data.answer || "No answer found");
+      setQuestion(""); // clear input
+
+      // If question was asked by voice, generate audio using ElevenLabs
+      if (wasVoiceInput && data.answer) {
+        try {
+          const audioBlob = await generateAudio(data.answer);
+          playAudio(audioBlob);
+        } catch (ttsErr) {
+          toast({
+            title: "Voice Output Error",
+            description: "Could not generate voice reply. Please check your ElevenLabs API key.",
+            variant: "destructive",
+          });
+        }
+      }
+    } catch (error) {
+      setAnswer("Sorry, something went wrong. Please try again.");
+      toast({
+        title: "Error",
+        description: "Something went wrong. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+      setWasVoiceInput(false);
+    }
+  };
+
+  // End call function
+  const endCall = () => {
+    setIsInCall(false);
+    setListening(false);
+    setShowAnswer(false);
+    setAnswer("");
+    setAudioUrl(null);
+    setQuestion("");
+  };
+
+  // Generate audio using ElevenLabs API
+  const generateAudio = async (text: string) => {
+    try {
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': ELEVENLABS_API_KEY,
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: 'eleven_monolingual_v1',
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.5
+          }
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`ElevenLabs API error: ${response.status}`);
+      }
+
+      const audioBlob = await response.blob();
+      return audioBlob;
+    } catch (error) {
+      console.error('ElevenLabs API error:', error);
+      throw error;
+    }
+  };
+
+  // Play audio from ElevenLabs
+  const playAudio = (audioBlob: Blob) => {
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+    }
+    const url = URL.createObjectURL(audioBlob);
+    setAudioUrl(url);
+    const audio = new Audio(url);
+    audio.play();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,9 +197,10 @@ const AskAI = () => {
       return;
     }
 
-        setIsLoading(true);
+    setIsLoading(true);
     setShowAnswer(true);
     setAnswer("");
+    setAudioUrl(null);
 
     try {
       // Call your FastAPI endpoint
@@ -44,10 +217,22 @@ const AskAI = () => {
       }
 
       const data = await response.json();
-
-      // Set the answer in the state
       setAnswer(data.answer || "No answer found");
       setQuestion(""); // clear input
+
+      // If question was asked by voice, generate audio using ElevenLabs
+      if (wasVoiceInput && data.answer) {
+        try {
+          const audioBlob = await generateAudio(data.answer);
+          playAudio(audioBlob);
+        } catch (ttsErr) {
+          toast({
+            title: "Voice Output Error",
+            description: "Could not generate voice reply. Please check your ElevenLabs API key.",
+            variant: "destructive",
+          });
+        }
+      }
     } catch (error) {
       setAnswer("Sorry, something went wrong. Please try again.");
       toast({
@@ -57,6 +242,7 @@ const AskAI = () => {
       });
     } finally {
       setIsLoading(false);
+      setWasVoiceInput(false); // reset for next question
     }
   };
 
@@ -122,45 +308,107 @@ const AskAI = () => {
             <CardTitle className="flex items-center space-x-2">
               <Brain className="h-6 w-6 text-primary" />
               <span>Medical AI Assistant</span>
+              {isInCall && (
+                <div className="flex items-center space-x-2 ml-auto">
+                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                  <span className="text-sm text-red-500 font-medium">LIVE CALL</span>
+                </div>
+              )}
             </CardTitle>
             <CardDescription>
-              Ask any health-related question and get evidence-based information.
+              {isInCall 
+                ? "You're in a call with the AI. Speak naturally or click the mic to restart."
+                : "Ask any health-related question and get evidence-based information."
+              }
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label htmlFor="question" className="block text-sm font-medium text-foreground mb-2">
-                  Your Medical Question
-                </label>
-                <Textarea
-                  id="question"
-                  placeholder="Type your health question here... (e.g., 'What are the symptoms of diabetes?')"
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                  className="min-h-[120px] resize-none"
-                  disabled={isLoading}
-                />
+            {!isInCall ? (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label htmlFor="question" className="block text-sm font-medium text-foreground mb-2">
+                    Your Medical Question
+                  </label>
+                  <div className="relative flex">
+                    <Textarea
+                      id="question"
+                      placeholder="Type your health question here... (e.g., 'What are the symptoms of diabetes?')"
+                      value={question}
+                      onChange={(e) => setQuestion(e.target.value)}
+                      className="min-h-[120px] resize-none pr-12"
+                      disabled={isLoading}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleVoiceInput}
+                      className={`absolute right-3 top-3 p-2 rounded-full transition-colors ${listening ? 'bg-red-100' : 'bg-muted'} hover:bg-accent focus:outline-none`}
+                      aria-label={listening ? "Stop voice input" : "Start voice input"}
+                      disabled={isLoading}
+                    >
+                      <Mic className={`h-6 w-6 ${listening ? 'text-red-500 animate-pulse' : 'text-primary'}`} />
+                      {listening && (
+                        <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-ping"></span>
+                      )}
+                    </button>
+                  </div>
+                  {listening && (
+                    <div className="text-xs text-red-500 mt-1 flex items-center space-x-2">
+                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                      <span>Listening... (speak now)</span>
+                    </div>
+                  )}
+                </div>
+                <Button 
+                  type="submit" 
+                  size="lg" 
+                  className="w-full" 
+                  disabled={isLoading || !question.trim()}
+                >
+                  {isLoading ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Processing...</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center space-x-2">
+                      <Send className="h-4 w-4" />
+                      <span>Ask MediHelp AI</span>
+                    </div>
+                  )}
+                </Button>
+              </form>
+            ) : (
+              <div className="space-y-4">
+                <div className="text-center">
+                  <div className="flex justify-center mb-4">
+                    <button
+                      onClick={handleVoiceInput}
+                      className={`p-4 rounded-full transition-all ${listening ? 'bg-red-500 scale-110' : 'bg-primary hover:bg-primary/90'} text-white shadow-lg`}
+                      disabled={isLoading}
+                    >
+                      <Mic className="h-8 w-8" />
+                    </button>
+                  </div>
+                  <p className="text-muted-foreground">
+                    {listening 
+                      ? "Listening... Speak your question now"
+                      : isLoading 
+                        ? "Processing your question..."
+                        : "Click the mic to ask a question"
+                    }
+                  </p>
+                </div>
+                <div className="flex justify-center">
+                  <Button 
+                    onClick={endCall}
+                    variant="outline"
+                    className="text-destructive border-destructive hover:bg-destructive hover:text-white"
+                  >
+                    End Call
+                  </Button>
+                </div>
               </div>
-              <Button 
-                type="submit" 
-                size="lg" 
-                className="w-full" 
-                disabled={isLoading || !question.trim()}
-              >
-                {isLoading ? (
-                  <div className="flex items-center space-x-2">
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    <span>Processing...</span>
-                  </div>
-                ) : (
-                  <div className="flex items-center space-x-2">
-                    <Send className="h-4 w-4" />
-                    <span>Ask MediHelp AI</span>
-                  </div>
-                )}
-              </Button>
-            </form>
+            )}
           </CardContent>
         </Card>
 
@@ -184,6 +432,9 @@ const AskAI = () => {
                   <p className="text-foreground leading-relaxed whitespace-pre-wrap">
                     {answer}
                   </p>
+                  {audioUrl && (
+                    <audio src={audioUrl} autoPlay controls className="mt-2 w-full" />
+                  )}
                 </div>
               )}
             </CardContent>
